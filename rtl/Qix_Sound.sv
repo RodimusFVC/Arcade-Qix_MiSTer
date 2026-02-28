@@ -3,11 +3,11 @@
 // Qix Audio Board
 // Copyright (C) 2026 Rodimus
 //
-// Hardware: MC6802 audio CPU (cpu68 core) + 2× PIA6821 + 8-bit DAC +
+// Hardware: MC6802 audio CPU (jt680x core) + 2× PIA6821 + 8-bit DAC +
 //           discrete stereo volume attenuator
 //
 // Responsibilities:
-//   - Audio CPU (~0.92 MHz, 20 MHz ÷ 22 via hold gate)
+//   - Audio CPU (~0.91 MHz, jt680x with cen at 20 MHz ÷ 22 ≈ 909 kHz)
 //   - Receives sound commands from data CPU via sndPIA1 port A
 //   - 8-bit unsigned DAC via sndPIA1 port B
 //   - Stereo volume scaling from data CPU sndPIA0 port B
@@ -40,65 +40,81 @@ module Qix_Sound (
 );
 
 // ---------------------------------------------------------------------------
-// Audio CPU bus signals (declared early to avoid forward-reference issues)
+// Audio CPU bus signals
 // ---------------------------------------------------------------------------
 wire [15:0] snd_A;
 wire [7:0]  snd_Dout;
 wire [7:0]  snd_Din;   // assigned at bottom by read mux
-wire        snd_rw;    // 1 = read, 0 = write
-wire        snd_vma;   // valid memory address from cpu68
+wire        snd_wr;    // 1 = write (jt680x polarity)
+wire        snd_rw = ~snd_wr;  // 1 = read — passed to PIAs
 
 // ---------------------------------------------------------------------------
-// Clock enable: ~0.92 MHz (20 MHz ÷ 22 = 909 kHz, within 1.2% of target)
+// Clock enable: ~0.91 MHz (20 MHz ÷ 22 = 909 kHz, within 1.6% of 895 kHz target)
 //
-// The cpu68 entity has no CEN port. We use `hold` to gate execution:
-//   hold = 1 → CPU inserts wait state (freezes)
-//   hold = 0 → CPU steps one state
-// Asserting hold for 21 out of every 22 cycles gives ~909 kHz effective rate.
+// jt680x uses a cen (clock enable) port instead of a hold gate.
+// Pause is applied by gating cen — when paused no cen pulses reach the CPU.
 // ---------------------------------------------------------------------------
 reg [4:0] snd_div;
 always @(posedge clk_20m)
     if (snd_div == 5'd21) snd_div <= 5'd0;
     else                  snd_div <= snd_div + 5'd1;
 
-wire cen_snd = (snd_div == 5'd0);
-wire cpu_hold = ~cen_snd | pause;   // hold=0 for 1 cycle per 22 (or all when paused)
+wire snd_cen_raw = (snd_div == 5'd0);
+wire snd_cen     = snd_cen_raw & ~pause;
 
 // ---------------------------------------------------------------------------
-// Address decoder — only valid when vma=1
+// Address decoder — jt680x address bus is always valid (no VMA)
 // ---------------------------------------------------------------------------
-wire sndpia2_cs_addr = snd_vma & (snd_A[15:13] == 3'b001);   // $2000-$3FFF
-wire sndpia1_cs_addr = snd_vma & (snd_A[15:14] == 2'b01);    // $4000-$7FFF
-wire rom_cs          = snd_vma & (snd_A[15:11] == 5'b11111);  // $F800-$FFFF
+wire sndpia2_cs_addr = (snd_A[15:13] == 3'b001);   // $2000-$3FFF
+wire sndpia1_cs_addr = (snd_A[15:14] == 2'b01);    // $4000-$7FFF
+wire rom_cs          = (snd_A[15:11] == 5'b11111);  // $F800-$FFFF
 
 // Single-cycle PIA enables: fire only during the active CPU tick
-wire sndpia2_en = cen_snd & sndpia2_cs_addr;
-wire sndpia1_en = cen_snd & sndpia1_cs_addr;
+wire sndpia2_en = snd_cen & sndpia2_cs_addr;
+wire sndpia1_en = snd_cen & sndpia1_cs_addr;
 
 // ---------------------------------------------------------------------------
-// cpu68 — MC6802 audio CPU (entity name is cpu68, file is m6802.vhd)
-//   rst  : active-high reset
-//   irq  : active-high IRQ (OR of all PIA IRQ outputs)
-//   nmi  : active-high NMI — tie low (not used)
-//   hold : active-high hold/wait — used as our clock enable gate
-//   halt : active-high halt — tie low
+// 6802 internal RAM — 128 bytes ($0000-$007F)
+// jt680x is a pure CPU core and does NOT include internal RAM.
+// ---------------------------------------------------------------------------
+reg [7:0] internal_ram [0:127];
+wire internal_ram_cs   = (snd_A[15:7] == 9'd0);    // $0000-$007F
+wire [7:0] internal_ram_dout = internal_ram[snd_A[6:0]];
+
+always @(posedge clk_20m)
+    if (snd_cen && snd_wr && internal_ram_cs)
+        internal_ram[snd_A[6:0]] <= snd_Dout;
+
+// ---------------------------------------------------------------------------
+// jt680x — MC6802 compatible audio CPU
+//   rst      : active-high reset
+//   cen      : clock enable at crystal/4 rate (~909 kHz)
+//   wr       : active-high write (snd_rw = ~snd_wr for PIAs)
+//   ext_halt : pause the CPU (bus available, active high)
+//   irq      : active-high IRQ (OR of all PIA IRQ outputs)
+//   nmi      : active-high NMI — tie low (not used)
+//   6801 timer/serial interrupts: tie to 0 (not 6801 features)
 // ---------------------------------------------------------------------------
 wire snd_irq;
 
-cpu68 audio_cpu (
-    .clk      (clk_20m),
+jt680x audio_cpu (
     .rst      (reset),
-    .rw       (snd_rw),
-    .vma      (snd_vma),
-    .address  (snd_A),
-    .data_in  (snd_Din),
-    .data_out (snd_Dout),
-    .hold     (cpu_hold),
-    .halt     (1'b0),
+    .clk      (clk_20m),
+    .cen      (snd_cen),
+    .wr       (snd_wr),
+    .addr     (snd_A),
+    .din      (snd_Din),
+    .dout     (snd_Dout),
+    .ext_halt (pause),
+    .ba       (),
     .irq      (snd_irq),
     .nmi      (1'b0),
-    .test_alu (),
-    .test_cc  ()
+    .irq_icf  (1'b0),
+    .irq_ocf  (1'b0),
+    .irq_tof  (1'b0),
+    .irq_sci  (1'b0),
+    .irq_cmf  (1'b0),
+    .irq2     (1'b0)
 );
 
 // ---------------------------------------------------------------------------
@@ -176,7 +192,7 @@ pia6821 sndpia2 (
     .cb2_oe   ()
 );
 
-// IRQ to audio CPU: OR of all PIA interrupt outputs (active-high to cpu68)
+// IRQ to audio CPU: OR of all PIA interrupt outputs (active-high)
 assign snd_irq = sndpia1_irqa | sndpia1_irqb | sndpia2_irqa | sndpia2_irqb;
 
 // ---------------------------------------------------------------------------
@@ -200,12 +216,13 @@ end
 
 // ---------------------------------------------------------------------------
 // CPU data bus read mux — default $FF for unmapped regions
-// Internal 6802 RAM ($0000-$007F) is handled inside cpu68; no external action.
+// Internal 6802 RAM ($0000-$007F) now handled externally via internal_ram.
 // ---------------------------------------------------------------------------
 assign snd_Din =
-    sndpia2_cs_addr ? sndpia2_dout :
-    sndpia1_cs_addr ? sndpia1_dout :
-    rom_cs          ? rom_dout     :
+    internal_ram_cs ? internal_ram_dout :
+    sndpia2_cs_addr ? sndpia2_dout      :
+    sndpia1_cs_addr ? sndpia1_dout      :
+    rom_cs          ? rom_dout          :
     8'hFF;
 
 // ---------------------------------------------------------------------------

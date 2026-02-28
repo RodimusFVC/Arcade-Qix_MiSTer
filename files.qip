@@ -17,7 +17,13 @@ set_global_assignment -name VHDL_FILE rtl/ram_rom/dpram_dc.vhd
 set_global_assignment -name VERILOG_FILE rtl/cpu/MC6809/mc6809e.v
 set_global_assignment -name VERILOG_FILE rtl/cpu/MC6809/mc6809i.v
 
-set_global_assignment -name VHDL_FILE rtl/cpu/m6802.vhd
+set_global_assignment -name VERILOG_FILE rtl/cpu/jt680x/hdl/jt680x.v
+set_global_assignment -name VERILOG_FILE rtl/cpu/jt680x/hdl/jt680x_ctrl.v
+set_global_assignment -name VERILOG_FILE rtl/cpu/jt680x/hdl/jt680x_alu.v
+set_global_assignment -name VERILOG_FILE rtl/cpu/jt680x/hdl/jt680x_regs.v
+set_global_assignment -name VERILOG_FILE rtl/cpu/jt680x/hdl/jt680x_ucode.v
+set_global_assignment -name SEARCH_PATH rtl/cpu/jt680x/hdl
+
 set_global_assignment -name VHDL_FILE rtl/cpu/mc6845.vhd
 
 set_global_assignment -name VHDL_FILE rtl/custom/pia6821.vhd
