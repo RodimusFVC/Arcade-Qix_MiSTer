@@ -227,8 +227,8 @@ assign snd_irq_to_snd = sndpia_ca2_o;
 assign flip_screen    = sndpia_cb2_o;
 
 // IRQ to data CPU: active-low merge of sndPIA0 IRQA and IRQB
-assign n_irq = ~(sndpia_irqa | sndpia_irqb | vsync_irq);
-//assign n_irq = ~(sndpia_irqa | sndpia_irqb);
+//assign n_irq = ~(sndpia_irqa | sndpia_irqb | vsync_irq);    // Not Working - Black Screen
+assign n_irq = ~(sndpia_irqa | sndpia_irqb);
 
 // ---------------------------------------------------------------------------
 // PIA0 ($9400-$97FF) — player 1 joystick + coin inputs
